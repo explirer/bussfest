@@ -8,49 +8,92 @@
     <style>
         html, body { height: 100%; margin: 0; font-family: Arial, sans-serif; }
         #map { height: 100%; width: 100%; }
-        #searchBox {
+        #filterButton {
             position: absolute;
             top: 10px;
-            left: 50px;
+            left: 60px;
             z-index: 1000;
             background: white;
             padding: 10px;
             border-radius: 5px;
             box-shadow: 0 0 15px rgba(0,0,0,0.2);
-            display: flex;
-            gap: 5px;
-        }
-        #searchBox input {
-            padding: 5px;
-            font-size: 14px;
-        }
-        #searchBox button {
-            padding: 5px 10px;
-            font-size: 14px;
             cursor: pointer;
+        }
+        /* Modal Styles */
+        #filterModal {
+            display: none;
+            position: absolute;
+            top: 50px;
+            left: 10px;
+            background: white;
+            padding: 20px;
+            border-radius: 5px;
+            box-shadow: 0 0 15px rgba(0, 0, 0, 0.2);
+            z-index: 2000;
+            width: 300px; /* Increased width */
+            height: 700px; /* Increased height */
+        }
+        #modalOverlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 1500;
+        }
+        #lineOptions {
+            border: 1px solid #ccc;
+            max-height: 500px; /* Increased max height */
+            overflow-y: auto;
+        }
+        #lineOptions div {
+            padding: 5px;
+            cursor: pointer;
+        }
+        #lineOptions div.selected {
+            background-color: #f0f0f0; /* Highlight selected items */
+            font-weight: bold;
+        }
+        #searchInput {
+            width: 100%;
+            padding: 5px;
+            margin-bottom: 10px;
+        }
+        .filter-buttons {
+            display: flex;
+            justify-content: space-between;
+            margin: 10px 0;
         }
     </style>
 </head>
 <body>
-    <div id="searchBox">
-        <input type="text" id="busSearch" placeholder="Enter Bus ID" onkeypress="handleKeyPress(event)">
-        <button onclick="searchBus()">Search</button>
+    <div id="filterButton" onclick="openModal()">Filter Buses</div>
+
+    <div id="modalOverlay" onclick="closeModal()"></div>
+    <div id="filterModal">
+        <h3>Select Lines to Display</h3>
+        <input type="text" id="searchInput" placeholder="Search lines..." oninput="filterLines()">
+        <div class="filter-buttons">
+            <button onclick="selectAllLines()">Select All</button>
+            <button onclick="deselectAllLines()">Deselect All</button>
+        </div>
+        <div id="lineOptions"></div>
     </div>
+
     <div id="map"></div>
 
     <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet-smooth-marker-bouncing/0.0.7/bouncing.min.js"></script>
     <script>
-        // Step 1: Initialize the map
         const map = L.map('map').setView([60.3913, 5.3221], 13); // Center on Bergen, Norway
 
-        // Step 2: Add OpenStreetMap tile layer
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             maxZoom: 19,
             attribution: '© OpenStreetMap contributors'
         }).addTo(map);
 
-        // Step 3: Create a custom bus icon
         const busIcon = L.icon({
             iconUrl: 'https://cdn-icons-png.flaticon.com/512/0/308.png',
             iconSize: [32, 32],
@@ -58,19 +101,14 @@
             popupAnchor: [0, -32]
         });
 
-        // Step 4: Variables for WebSocket and tracking
         let vehicleMarkers = {};
         let lastUpdatedTimes = {};
-        let heartbeatInterval;
-        let reconnectAttempts = 0;
+        let selectedLines = ['28', '29'];
+        let availableLines = new Set(selectedLines);
 
-        // Function to initialize the WebSocket
         function initializeWebSocket() {
             const ws = new WebSocket('wss://api.entur.io/realtime/v1/vehicles/subscriptions');
-
             ws.onopen = () => {
-                console.log('WebSocket connection established');
-                reconnectAttempts = 0;
                 ws.send(JSON.stringify({
                     query: `subscription {
                         vehicles(codespaceId: "SKY") {
@@ -80,7 +118,7 @@
                                 longitude
                             }
                             line {
-                                lineRef
+                                publicCode
                             }
                             vehicleId
                             vehicleStatus
@@ -88,87 +126,128 @@
                         }
                     }`
                 }));
-                startHeartbeat(ws);
             };
 
             ws.onmessage = (event) => {
                 const data = JSON.parse(event.data);
                 if (!data.data || !data.data.vehicles) return;
 
-                const vehicles = data.data.vehicles;
-
-                vehicles.forEach(vehicle => {
+                data.data.vehicles.forEach(vehicle => {
                     const { latitude, longitude } = vehicle.location;
-                    const lineRef = vehicle.line.lineRef;
+                    const publicCode = vehicle.line.publicCode;
                     const vehicleId = vehicle.vehicleId;
                     const vehicleStatus = vehicle.vehicleStatus;
                     const destinationName = vehicle.destinationName;
                     const lastUpdated = vehicle.lastUpdated;
 
-                    // Only track vehicles with lineRef of 'SKY:Line:29' or 'SKY:Line:28'
-                    if (lineRef !== 'SKY:Line:29' && lineRef !== 'SKY:Line:28') return;
+                    if (!availableLines.has(publicCode)) {
+                        availableLines.add(publicCode);
+                        updateLineOptions();
+                    }
 
-                    // Check if the data is newer than the last received update for this vehicle
+                    if (!selectedLines.includes(publicCode)) {
+                        if (vehicleMarkers[vehicleId]) {
+                            map.removeLayer(vehicleMarkers[vehicleId]); // Remove marker from map if line is not selected
+                            delete vehicleMarkers[vehicleId];
+                        }
+                        return;
+                    }
+
                     if (!lastUpdatedTimes[vehicleId] || lastUpdated > lastUpdatedTimes[vehicleId]) {
                         lastUpdatedTimes[vehicleId] = lastUpdated;
 
                         if (vehicleMarkers[vehicleId]) {
-                            // Update the marker to the new position immediately
                             vehicleMarkers[vehicleId].setLatLng([latitude, longitude]);
-                            vehicleMarkers[vehicleId].setTooltipContent(`Bus ID: ${vehicleId}<br>Line: ${lineRef}<br>Status: ${vehicleStatus}<br>Destination: ${destinationName}`);
+                            vehicleMarkers[vehicleId].setTooltipContent(`Bus ID: ${vehicleId}<br>Line: ${publicCode}<br>Status: ${vehicleStatus}<br>Destination: ${destinationName}`);
                         } else {
-                            const marker = L.marker([latitude, longitude], { icon: busIcon }).addTo(map)
-                                .bindTooltip(`Bus ID: ${vehicleId}<br>Line: ${lineRef}<br>Status: ${vehicleStatus}<br>Destination: ${destinationName}`, { permanent: true, direction: 'top', offset: [0, -10] })
+                            const marker = L.marker([latitude, longitude], { icon: busIcon, publicCode: publicCode }).addTo(map)
+                                .bindTooltip(`Bus ID: ${vehicleId}<br>Line: ${publicCode}<br>Status: ${vehicleStatus}<br>Destination: ${destinationName}`, { permanent: true, direction: 'top', offset: [0, -10] })
                                 .openTooltip();
                             vehicleMarkers[vehicleId] = marker;
                         }
                     }
                 });
             };
-
-            ws.onerror = (error) => {
-                console.error('WebSocket error:', error);
-            };
-
-            ws.onclose = () => {
-                console.log('WebSocket connection closed, attempting to reconnect...');
-                clearInterval(heartbeatInterval);
-                reconnectAttempts++;
-                const reconnectDelay = Math.min(5000 * reconnectAttempts, 30000); // Exponential backoff up to 30s
-                setTimeout(initializeWebSocket, reconnectDelay);
-            };
         }
 
-        // Function to start the heartbeat to keep the WebSocket alive
-        function startHeartbeat(ws) {
-            clearInterval(heartbeatInterval);
-            heartbeatInterval = setInterval(() => {
-                if (ws.readyState === WebSocket.OPEN) {
-                    ws.send(JSON.stringify({ type: 'ping' }));
-                }
-            }, 15000); // Send heartbeat every 15 seconds
+        function updateLineOptions() {
+            const lineOptionsDiv = document.getElementById('lineOptions');
+            lineOptionsDiv.innerHTML = ''; // Clear existing options
+
+            // Sort available lines alphabetically
+            const sortedLines = Array.from(availableLines).sort();
+
+            sortedLines.forEach(publicCode => {
+                const lineItem = document.createElement('div');
+                lineItem.textContent = `Line ${publicCode}`;
+                lineItem.className = selectedLines.includes(publicCode) ? 'selected' : '';
+                lineItem.onclick = () => toggleLineSelection(publicCode, lineItem);
+                lineOptionsDiv.appendChild(lineItem);
+            });
         }
 
-        // Initialize WebSocket for the first time
-        initializeWebSocket();
-
-        // Search function to locate a bus by ID and update the tracked buses
-        function searchBus() {
-            const busId = document.getElementById('busSearch').value;
-            if (vehicleMarkers[busId]) {
-                map.setView(vehicleMarkers[busId].getLatLng(), 15);
-                vehicleMarkers[busId].openTooltip();
+        function toggleLineSelection(publicCode, lineItem) {
+            if (selectedLines.includes(publicCode)) {
+                selectedLines = selectedLines.filter(code => code !== publicCode);
+                lineItem.classList.remove('selected');
             } else {
-                alert('Bus ID not found');
+                selectedLines.push(publicCode);
+                lineItem.classList.add('selected');
             }
+            applyFilters(); // Update the map immediately
         }
 
-        // Handle Enter key press for search
-        function handleKeyPress(event) {
-            if (event.key === 'Enter') {
-                searchBus();
-            }
+        function selectAllLines() {
+            selectedLines = Array.from(availableLines); // Select all available lines
+            updateLineOptions();
+            applyFilters(); // Update the map immediately
         }
+
+        function deselectAllLines() {
+            selectedLines = []; // Clear all selected lines
+            updateLineOptions();
+            applyFilters(); // Update the map immediately
+        }
+
+        function filterLines() {
+            const searchValue = document.getElementById('searchInput').value.toLowerCase();
+            const lineOptionsDiv = document.getElementById('lineOptions');
+            const lineItems = lineOptionsDiv.querySelectorAll('div');
+
+            lineItems.forEach(item => {
+                if (item.textContent.toLowerCase().includes(searchValue)) {
+                    item.style.display = 'block';
+                } else {
+                    item.style.display = 'none';
+                }
+            });
+        }
+
+        function applyFilters() {
+            // Immediately update map markers based on the selected lines
+            Object.keys(vehicleMarkers).forEach(vehicleId => {
+                const marker = vehicleMarkers[vehicleId];
+                const publicCode = marker.options.publicCode;
+
+                if (!selectedLines.includes(publicCode)) {
+                    map.removeLayer(marker);
+                    delete vehicleMarkers[vehicleId];
+                }
+            });
+        }
+
+        function openModal() {
+            updateLineOptions();
+            document.getElementById('filterModal').style.display = 'block';
+            document.getElementById('modalOverlay').style.display = 'block';
+        }
+
+        function closeModal() {
+            document.getElementById('filterModal').style.display = 'none';
+            document.getElementById('modalOverlay').style.display = 'none';
+        }
+
+        initializeWebSocket();
     </script>
 </body>
 </html>
