@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Real-time Vehicle Tracking on OpenStreetMap</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <style>
+        html, body { height: 100%; margin: 0; }
+        #map { height: 100%; width: 100%; }
+        #searchBox { position: absolute; top: 10px; left: 50px; z-index: 1000; background: white; padding: 10px; border-radius: 5px; box-shadow: 0 0 15px rgba(0,0,0,0.2); }
+    </style>
+</head>
+<body>
+    <div id="searchBox">
+        <input type="text" id="busSearch" placeholder="Enter Bus ID">
+        <button onclick="searchBus()">Search</button>
+    </div>
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet-smooth-marker-bouncing/0.0.7/bouncing.min.js"></script>
+    <script>
+        // Step 1: Initialize the map
+        var map = L.map('map').setView([60.3913, 5.3221], 13); // Center on Bergen, Norway
+
+        // Step 2: Add OpenStreetMap tile layer
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '© OpenStreetMap contributors'
+        }).addTo(map);
+
+        // Step 3: Create a custom bus icon
+        var busIcon = L.icon({
+            iconUrl: 'https://cdn-icons-png.flaticon.com/512/0/308.png', // Bus icon URL
+            iconSize: [32, 32], // Size of the icon
+            iconAnchor: [16, 32], // Point of the icon which will correspond to marker's location
+            popupAnchor: [0, -32] // Point from which the popup should open relative to the iconAnchor
+        });
+
+        // Step 4: Create a WebSocket connection
+        const ws = new WebSocket('wss://api.entur.io/realtime/v1/vehicles/subscriptions');
+        var vehicleMarkers = {};
+        var trackedBusIds = ['29', '28']; // Default bus IDs to track
+        var lastUpdatedTimes = {};
+
+        ws.onopen = () => {
+            console.log('WebSocket connection established');
+            ws.send(JSON.stringify({
+                query: `
+                subscription {
+                    vehicles(codespaceId: "SKY") {
+                        lastUpdated
+                        location {
+                            latitude
+                            longitude
+                        }
+                        line {
+                            lineRef
+                        }
+                    }
+                }`
+            }));
+        };
+
+        ws.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            const vehicles = data.data.vehicles;
+
+            vehicles.forEach(vehicle => {
+                const lat = vehicle.location.latitude;
+                const lon = vehicle.location.longitude;
+                const lineRef = vehicle.line.lineRef;
+                const busId = lineRef.split(':').pop();
+                const lastUpdated = vehicle.lastUpdated;
+
+                if (!trackedBusIds.includes(busId)) return;
+
+                // Check if the data is newer than the last received update for this bus
+                if (!lastUpdatedTimes[busId] || lastUpdated > lastUpdatedTimes[busId]) {
+                    lastUpdatedTimes[busId] = lastUpdated;
+
+                    if (vehicleMarkers[busId]) {
+                        moveMarkerSmoothly(vehicleMarkers[busId], [lat, lon]);
+                    } else {
+                        const marker = L.marker([lat, lon], { icon: busIcon }).addTo(map)
+                            .bindTooltip(`Bus ID: ${busId}`, { permanent: true, direction: 'top', offset: [0, -10] })
+                            .openTooltip();
+                        vehicleMarkers[busId] = marker;
+                    }
+                }
+            });
+        };
+
+        ws.onerror = (error) => {
+            console.error('WebSocket error:', error);
+        };
+
+        ws.onclose = () => {
+            console.log('WebSocket connection closed');
+        };
+
+        // Function to move a marker smoothly to a new location
+        function moveMarkerSmoothly(marker, newLatLng) {
+            const currentLatLng = marker.getLatLng();
+            const dist = distance(currentLatLng.lat, currentLatLng.lng, newLatLng[0], newLatLng[1]);
+
+            // Ignore unrealistic jumps, e.g., if distance > 1000 meters
+            if (dist > 1000) {
+                console.log(`Ignoring unrealistic jump: ${dist} meters`);
+                return;
+            }
+
+            const smoothedLatLng = smoothPosition(currentLatLng, newLatLng);
+            marker.setLatLng(smoothedLatLng);
+        }
+
+        // Function to calculate distance between two coordinates (Haversine formula)
+        function distance(lat1, lon1, lat2, lon2) {
+            var R = 6371e3; // Earth's radius in meters
+            var φ1 = lat1 * Math.PI / 180;
+            var φ2 = lat2 * Math.PI / 180;
+            var Δφ = (lat2 - lat1) * Math.PI / 180;
+            var Δλ = (lon2 - lon1) * Math.PI / 180;
+
+            var a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+                    Math.cos(φ1) * Math.cos(φ2) *
+                    Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+            var c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+            return R * c; // in meters
+        }
+
+        // Function to smooth the position
+        function smoothPosition(currentLatLng, newLatLng, alpha = 0.2) {
+            return [
+                currentLatLng.lat + alpha * (newLatLng[0] - currentLatLng.lat),
+                currentLatLng.lng + alpha * (newLatLng[1] - currentLatLng.lng)
+            ];
+        }
+
+        // Step 6: Search function to locate a bus by ID and update the tracked buses
+        function searchBus() {
+            const busId = document.getElementById('busSearch').value;
+            if (vehicleMarkers[busId]) {
+                map.setView(vehicleMarkers[busId].getLatLng(), 15);
+                vehicleMarkers[busId].openTooltip();
+                if (!trackedBusIds.includes(busId)) {
+                    trackedBusIds.push(busId); // Update the tracked bus IDs
+                }
+            } else {
+                alert('Bus ID not found');
+            }
+        }
+    </script>
+</body>
+</html>
