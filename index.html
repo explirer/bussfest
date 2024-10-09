@@ -158,11 +158,20 @@
 
                         if (vehicleMarkers[vehicleId]) {
                             vehicleMarkers[vehicleId].setLatLng([latitude, longitude]);
-                            vehicleMarkers[vehicleId].setTooltipContent(`Bus ID: ${vehicleId}<br>Line: ${publicCode}<br>Status: ${vehicleStatus}<br>Destination: ${destinationName}`);
+                            vehicleMarkers[vehicleId].setTooltipContent(`Line: ${publicCode}`);
                         } else {
                             const marker = L.marker([latitude, longitude], { icon: busIcon, publicCode: publicCode }).addTo(map)
-                                .bindTooltip(`Bus ID: ${vehicleId}<br>Line: ${publicCode}<br>Status: ${vehicleStatus}<br>Destination: ${destinationName}`, { permanent: true, direction: 'top', offset: [0, -10] })
-                                .openTooltip();
+                                .bindTooltip(`Line: ${publicCode}`, { permanent: true, direction: 'top', offset: [0, -10] });
+
+                            // Remove existing popup and create a new one each time
+                            marker.on('click', () => {
+                                if (marker.getPopup()) {
+                                    marker.closePopup();
+                                }
+                                marker.unbindPopup();
+                                marker.bindPopup(`Bus ID: ${vehicleId}<br>Line: ${publicCode}<br>Status: ${vehicleStatus}<br>Destination: ${destinationName}`).openPopup();
+                            });
+
                             vehicleMarkers[vehicleId] = marker;
                         }
                     }
