@@ -38,67 +38,88 @@
             popupAnchor: [0, -32] // Point from which the popup should open relative to the iconAnchor
         });
 
-        // Step 4: Create a WebSocket connection
-        const ws = new WebSocket('wss://api.entur.io/realtime/v1/vehicles/subscriptions');
+        // Step 4: Variables for WebSocket and tracking
         var vehicleMarkers = {};
         var trackedBusIds = ['29', '28']; // Default bus IDs to track
         var lastUpdatedTimes = {};
+        var heartbeatInterval;
 
-        ws.onopen = () => {
-            console.log('WebSocket connection established');
-            ws.send(JSON.stringify({
-                query: `
-                subscription {
-                    vehicles(codespaceId: "SKY") {
-                        lastUpdated
-                        location {
-                            latitude
-                            longitude
+        // Function to initialize the WebSocket
+        function initializeWebSocket() {
+            const ws = new WebSocket('wss://api.entur.io/realtime/v1/vehicles/subscriptions');
+
+            ws.onopen = () => {
+                console.log('WebSocket connection established');
+                ws.send(JSON.stringify({
+                    query: `
+                    subscription {
+                        vehicles(codespaceId: "SKY") {
+                            lastUpdated
+                            location {
+                                latitude
+                                longitude
+                            }
+                            line {
+                                lineRef
+                            }
                         }
-                        line {
-                            lineRef
+                    }`
+                }));
+                startHeartbeat(ws);
+            };
+
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                const vehicles = data.data.vehicles;
+
+                vehicles.forEach(vehicle => {
+                    const lat = vehicle.location.latitude;
+                    const lon = vehicle.location.longitude;
+                    const lineRef = vehicle.line.lineRef;
+                    const busId = lineRef.split(':').pop();
+                    const lastUpdated = vehicle.lastUpdated;
+
+                    if (!trackedBusIds.includes(busId)) return;
+
+                    // Check if the data is newer than the last received update for this bus
+                    if (!lastUpdatedTimes[busId] || lastUpdated > lastUpdatedTimes[busId]) {
+                        lastUpdatedTimes[busId] = lastUpdated;
+
+                        if (vehicleMarkers[busId]) {
+                            moveMarkerSmoothly(vehicleMarkers[busId], [lat, lon]);
+                        } else {
+                            const marker = L.marker([lat, lon], { icon: busIcon }).addTo(map)
+                                .bindTooltip(`Bus ID: ${busId}`, { permanent: true, direction: 'top', offset: [0, -10] })
+                                .openTooltip();
+                            vehicleMarkers[busId] = marker;
                         }
                     }
-                }`
-            }));
-        };
+                });
+            };
 
-        ws.onmessage = (event) => {
-            const data = JSON.parse(event.data);
-            const vehicles = data.data.vehicles;
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+            };
 
-            vehicles.forEach(vehicle => {
-                const lat = vehicle.location.latitude;
-                const lon = vehicle.location.longitude;
-                const lineRef = vehicle.line.lineRef;
-                const busId = lineRef.split(':').pop();
-                const lastUpdated = vehicle.lastUpdated;
+            ws.onclose = () => {
+                console.log('WebSocket connection closed, attempting to reconnect...');
+                clearInterval(heartbeatInterval);
+                setTimeout(initializeWebSocket, 5000); // Reconnect after 5 seconds
+            };
+        }
 
-                if (!trackedBusIds.includes(busId)) return;
-
-                // Check if the data is newer than the last received update for this bus
-                if (!lastUpdatedTimes[busId] || lastUpdated > lastUpdatedTimes[busId]) {
-                    lastUpdatedTimes[busId] = lastUpdated;
-
-                    if (vehicleMarkers[busId]) {
-                        moveMarkerSmoothly(vehicleMarkers[busId], [lat, lon]);
-                    } else {
-                        const marker = L.marker([lat, lon], { icon: busIcon }).addTo(map)
-                            .bindTooltip(`Bus ID: ${busId}`, { permanent: true, direction: 'top', offset: [0, -10] })
-                            .openTooltip();
-                        vehicleMarkers[busId] = marker;
-                    }
+        // Function to start the heartbeat to keep the WebSocket alive
+        function startHeartbeat(ws) {
+            clearInterval(heartbeatInterval);
+            heartbeatInterval = setInterval(() => {
+                if (ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ type: 'ping' }));
                 }
-            });
-        };
+            }, 30000); // Send heartbeat every 30 seconds
+        }
 
-        ws.onerror = (error) => {
-            console.error('WebSocket error:', error);
-        };
-
-        ws.onclose = () => {
-            console.log('WebSocket connection closed');
-        };
+        // Initialize WebSocket for the first time
+        initializeWebSocket();
 
         // Function to move a marker smoothly to a new location
         function moveMarkerSmoothly(marker, newLatLng) {
