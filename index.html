@@ -40,7 +40,6 @@
 
     <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet-smooth-marker-bouncing/0.0.7/bouncing.min.js"></script>
-    <script src="https://unpkg.com/@mapbox/polyline@1.1.1/dist/polyline.min.js"></script>
     <script>
         // Step 1: Initialize the map
         const map = L.map('map').setView([60.3913, 5.3221], 13); // Center on Bergen, Norway
@@ -61,7 +60,6 @@
 
         // Step 4: Variables for WebSocket and tracking
         let vehicleMarkers = {};
-        let trackedBusIds = ['29', '28']; // Default bus IDs to track
         let lastUpdatedTimes = {};
         let lastWebSocketMessages = {}; // Store the latest WebSocket message for each bus
         let heartbeatInterval;
@@ -88,6 +86,9 @@
                             line {
                                 lineRef
                             }
+                            vehicleId
+                            vehicleStatus
+                            destinationName
                         }
                     }`
                 }));
@@ -102,30 +103,34 @@
                 vehicles.forEach(vehicle => {
                     const { latitude, longitude } = vehicle.location;
                     const lineRef = vehicle.line.lineRef;
-                    const busId = lineRef.split(':').pop();
+                    const vehicleId = vehicle.vehicleId;
+                    const vehicleStatus = vehicle.vehicleStatus;
+                    const destinationName = vehicle.destinationName;
                     const lastUpdated = vehicle.lastUpdated;
 
-                    if (!trackedBusIds.includes(busId)) return;
+                    // Only track vehicles with lineRef of 'SKY:Line:29' or 'SKY:Line:28'
+                    if (lineRef !== 'SKY:Line:29' && lineRef !== 'SKY:Line:28') return;
 
                     // Store the latest WebSocket message for the bus
-                    lastWebSocketMessages[busId] = vehicle;
+                    lastWebSocketMessages[vehicleId] = vehicle;
 
-                    // Check if the data is newer than the last received update for this bus
-                    if (!lastUpdatedTimes[busId] || lastUpdated > lastUpdatedTimes[busId]) {
-                        lastUpdatedTimes[busId] = lastUpdated;
+                    // Check if the data is newer than the last received update for this vehicle
+                    if (!lastUpdatedTimes[vehicleId] || lastUpdated > lastUpdatedTimes[vehicleId]) {
+                        lastUpdatedTimes[vehicleId] = lastUpdated;
 
-                        if (vehicleMarkers[busId]) {
-                            // Accept unrealistic movement if WebSocket has reconnected
-                            routeBusMovement(vehicleMarkers[busId], [latitude, longitude], hasReconnected);
+                        if (vehicleMarkers[vehicleId]) {
+                            // Move the marker directly to the new position
+                            vehicleMarkers[vehicleId].setLatLng([latitude, longitude]);
+                            vehicleMarkers[vehicleId].bindTooltip(`Bus ID: ${vehicleId}<br>Line: ${lineRef}<br>Status: ${vehicleStatus}<br>Destination: ${destinationName}`, { permanent: true, direction: 'top', offset: [0, -10] }).openTooltip();
                         } else {
                             const marker = L.marker([latitude, longitude], { icon: busIcon }).addTo(map)
-                                .bindTooltip(`Bus ID: ${busId}`, { permanent: true, direction: 'top', offset: [0, -10] })
+                                .bindTooltip(`Bus ID: ${vehicleId}<br>Line: ${lineRef}<br>Status: ${vehicleStatus}<br>Destination: ${destinationName}`, { permanent: true, direction: 'top', offset: [0, -10] })
                                 .openTooltip();
                             marker.on('click', () => {
-                                const message = lastWebSocketMessages[busId];
-                                marker.bindPopup(`<b>Bus ID:</b> ${busId}<br><b>Last Updated:</b> ${message.lastUpdated}<br><b>Location:</b> [${message.location.latitude}, ${message.location.longitude}]`).openPopup();
+                                const message = lastWebSocketMessages[vehicleId];
+                                marker.bindPopup(`<b>Bus ID:</b> ${vehicleId}<br><b>Last Updated:</b> ${message.lastUpdated}<br><b>Location:</b> [${message.location.latitude}, ${message.location.longitude}]<br><b>Line:</b> ${lineRef}<br><b>Status:</b> ${vehicleStatus}<br><b>Destination:</b> ${destinationName}`).openPopup();
                             });
-                            vehicleMarkers[busId] = marker;
+                            vehicleMarkers[vehicleId] = marker;
                         }
                     }
                 });
@@ -157,52 +162,9 @@
         // Initialize WebSocket for the first time
         initializeWebSocket();
 
-        // Function to route the bus along the road
-        function routeBusMovement(marker, targetLatLng, acceptUnrealistic) {
-            const currentLatLng = marker.getLatLng();
-
-            if (acceptUnrealistic) {
-                animateRoute(marker, [currentLatLng, L.latLng(targetLatLng[0], targetLatLng[1])]);
-                return;
-            }
-
-            const url = `https://router.project-osrm.org/route/v1/driving/${currentLatLng.lng},${currentLatLng.lat};${targetLatLng[1]},${targetLatLng[0]}?overview=full&geometries=polyline`;
-            fetch(url)
-                .then(response => response.json())
-                .then(data => {
-                    if (data.routes && data.routes.length > 0) {
-                        const route = data.routes[0];
-                        const polyline = route.geometry;
-                        const coordinates = polyline_decode(polyline); // Correct usage of polyline decode
-                        const latLngs = coordinates.map(coord => L.latLng(coord[0], coord[1]));
-                        animateRoute(marker, latLngs);
-                    }
-                })
-                .catch(error => {
-                    console.error('Error fetching route:', error);
-                });
-        }
-
-        // Function to decode polyline using the correct polyline library function
-        function polyline_decode(encoded) {
-            return polyline.decode(encoded);
-        }
-
-        // Function to animate the bus along the routed path
-        function animateRoute(marker, coordinates) {
-            let step = 0;
-            const steps = coordinates.length;
-            const stepDuration = 100; // Duration in milliseconds for each step
-
-            function moveStep() {
-                if (step < steps) {
-                    marker.setLatLng(coordinates[step]);
-                    step++;
-                    setTimeout(moveStep, stepDuration);
-                }
-            }
-
-            moveStep();
+        // Function to handle bus movement without routing service
+        function moveBusDirectly(marker, targetLatLng) {
+            marker.setLatLng(targetLatLng);
         }
 
         // Search function to locate a bus by ID and update the tracked buses
@@ -211,9 +173,6 @@
             if (vehicleMarkers[busId]) {
                 map.setView(vehicleMarkers[busId].getLatLng(), 15);
                 vehicleMarkers[busId].openTooltip();
-                if (!trackedBusIds.includes(busId)) {
-                    trackedBusIds.push(busId); // Update the tracked bus IDs
-                }
             } else {
                 alert('Bus ID not found');
             }
