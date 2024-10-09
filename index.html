@@ -124,6 +124,7 @@
         let selectedLines = ['28', '29'];
         let availableLines = new Set(selectedLines);
         let userLocationMarker = null;
+        let hasCenteredOnUser = false; // Flag to track if we've already centered on the user's location
 
         function initializeWebSocket() {
             const ws = new WebSocket('wss://api.entur.io/realtime/v1/vehicles/subscriptions');
@@ -284,7 +285,11 @@
                         } else {
                             userLocationMarker = createPulsatingMarker(latitude, longitude).addTo(map);
                         }
-                        map.setView([latitude, longitude], 13); // Optional: Center the map on the user's location
+                        // Only center the map on the user's location the first time
+                        if (!hasCenteredOnUser) {
+                            map.setView([latitude, longitude], 13); // Center the map on the user's location
+                            hasCenteredOnUser = true; // Set the flag to true to prevent further auto-zooming
+                        }
                     },
                     (error) => {
                         console.error('Error retrieving location:', error);
