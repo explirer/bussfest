@@ -7,6 +7,11 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
     <style>
         html, body, #map { height: 100%; width: 100%; margin: 0; padding: 0; font-family: Arial, sans-serif; }
+        #map {
+            will-change: transform; /* Enable hardware acceleration */
+            backface-visibility: hidden;
+            transform: translateZ(0);
+        }
         #filterButton {
             position: absolute;
             top: 10px;
@@ -105,10 +110,19 @@
     <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet-smooth-marker-bouncing/0.0.7/bouncing.min.js"></script>
     <script>
-        const map = L.map('map').setView([60.3913, 5.3221], 13); // Center on Bergen, Norway
+        // Function to detect if the user is on a mobile device
+        function isMobileDevice() {
+            return /Mobi|Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+        }
+
+        const mapOptions = isMobileDevice()
+            ? { preferCanvas: true, zoomAnimation: false, fadeAnimation: false, markerZoomAnimation: false }
+            : {}; // Only enable Canvas rendering and disable animations on mobile devices
+
+        const map = L.map('map', mapOptions).setView([60.3913, 5.3221], 13); // Center on Bergen, Norway
 
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            maxZoom: 19,
+            maxZoom: isMobileDevice() ? 18 : 19, // Limit zoom level for mobile devices
             attribution: '© OpenStreetMap contributors'
         }).addTo(map);
 
