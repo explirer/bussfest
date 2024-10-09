@@ -61,10 +61,8 @@
         // Step 4: Variables for WebSocket and tracking
         let vehicleMarkers = {};
         let lastUpdatedTimes = {};
-        let lastWebSocketMessages = {}; // Store the latest WebSocket message for each bus
         let heartbeatInterval;
         let reconnectAttempts = 0;
-        let hasReconnected = false; // Track if WebSocket has reconnected
 
         // Function to initialize the WebSocket
         function initializeWebSocket() {
@@ -73,10 +71,8 @@
             ws.onopen = () => {
                 console.log('WebSocket connection established');
                 reconnectAttempts = 0;
-                hasReconnected = reconnectAttempts > 0; // Set flag if this is a reconnection
                 ws.send(JSON.stringify({
-                    query: `
-                    subscription {
+                    query: `subscription {
                         vehicles(codespaceId: "SKY") {
                             lastUpdated
                             location {
@@ -98,6 +94,7 @@
             ws.onmessage = (event) => {
                 const data = JSON.parse(event.data);
                 if (!data.data || !data.data.vehicles) return;
+
                 const vehicles = data.data.vehicles;
 
                 vehicles.forEach(vehicle => {
@@ -111,25 +108,18 @@
                     // Only track vehicles with lineRef of 'SKY:Line:29' or 'SKY:Line:28'
                     if (lineRef !== 'SKY:Line:29' && lineRef !== 'SKY:Line:28') return;
 
-                    // Store the latest WebSocket message for the bus
-                    lastWebSocketMessages[vehicleId] = vehicle;
-
                     // Check if the data is newer than the last received update for this vehicle
                     if (!lastUpdatedTimes[vehicleId] || lastUpdated > lastUpdatedTimes[vehicleId]) {
                         lastUpdatedTimes[vehicleId] = lastUpdated;
 
                         if (vehicleMarkers[vehicleId]) {
-                            // Move the marker directly to the new position
+                            // Update the marker to the new position immediately
                             vehicleMarkers[vehicleId].setLatLng([latitude, longitude]);
-                            vehicleMarkers[vehicleId].bindTooltip(`Bus ID: ${vehicleId}<br>Line: ${lineRef}<br>Status: ${vehicleStatus}<br>Destination: ${destinationName}`, { permanent: true, direction: 'top', offset: [0, -10] }).openTooltip();
+                            vehicleMarkers[vehicleId].setTooltipContent(`Bus ID: ${vehicleId}<br>Line: ${lineRef}<br>Status: ${vehicleStatus}<br>Destination: ${destinationName}`);
                         } else {
                             const marker = L.marker([latitude, longitude], { icon: busIcon }).addTo(map)
                                 .bindTooltip(`Bus ID: ${vehicleId}<br>Line: ${lineRef}<br>Status: ${vehicleStatus}<br>Destination: ${destinationName}`, { permanent: true, direction: 'top', offset: [0, -10] })
                                 .openTooltip();
-                            marker.on('click', () => {
-                                const message = lastWebSocketMessages[vehicleId];
-                                marker.bindPopup(`<b>Bus ID:</b> ${vehicleId}<br><b>Last Updated:</b> ${message.lastUpdated}<br><b>Location:</b> [${message.location.latitude}, ${message.location.longitude}]<br><b>Line:</b> ${lineRef}<br><b>Status:</b> ${vehicleStatus}<br><b>Destination:</b> ${destinationName}`).openPopup();
-                            });
                             vehicleMarkers[vehicleId] = marker;
                         }
                     }
@@ -156,16 +146,11 @@
                 if (ws.readyState === WebSocket.OPEN) {
                     ws.send(JSON.stringify({ type: 'ping' }));
                 }
-            }, 30000); // Send heartbeat every 30 seconds
+            }, 15000); // Send heartbeat every 15 seconds
         }
 
         // Initialize WebSocket for the first time
         initializeWebSocket();
-
-        // Function to handle bus movement without routing service
-        function moveBusDirectly(marker, targetLatLng) {
-            marker.setLatLng(targetLatLng);
-        }
 
         // Search function to locate a bus by ID and update the tracked buses
         function searchBus() {
