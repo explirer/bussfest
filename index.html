@@ -8,7 +8,7 @@
     <style>
         html, body, #map { height: 100%; width: 100%; margin: 0; padding: 0; font-family: Arial, sans-serif; }
         #map {
-            will-change: transform; /* Enable hardware acceleration */
+            will-change: transform;
             backface-visibility: hidden;
             transform: translateZ(0);
         }
@@ -24,7 +24,7 @@
             cursor: pointer;
         }
         #filterPanel {
-            display: none; /* Initially hidden */
+            display: none;
             position: absolute;
             top: 50px;
             left: 50px;
@@ -46,7 +46,7 @@
             cursor: pointer;
         }
         #lineOptions div.selected {
-            background-color: #f0f0f0; /* Highlight selected items */
+            background-color: #f0f0f0;
             font-weight: bold;
         }
         #searchInput {
@@ -59,7 +59,6 @@
             justify-content: space-between;
             margin: 10px 0;
         }
-        /* Pulsating effect for user location */
         .pulsating-marker {
             position: relative;
             width: 24px;
@@ -68,7 +67,6 @@
             border-radius: 50%;
             animation: pulsate 1.5s infinite ease-in-out;
         }
-
         @keyframes pulsate {
             0% {
                 transform: scale(0.8);
@@ -79,7 +77,6 @@
                 opacity: 0;
             }
         }
-
         .inner-circle {
             position: absolute;
             top: 50%;
@@ -110,19 +107,18 @@
     <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet-smooth-marker-bouncing/0.0.7/bouncing.min.js"></script>
     <script>
-        // Function to detect if the user is on a mobile device
         function isMobileDevice() {
             return /Mobi|Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
         }
 
         const mapOptions = isMobileDevice()
             ? { preferCanvas: true, zoomAnimation: false, fadeAnimation: false, markerZoomAnimation: false }
-            : {}; // Only enable Canvas rendering and disable animations on mobile devices
+            : {};
 
-        const map = L.map('map', mapOptions).setView([60.3913, 5.3221], 13); // Center on Bergen, Norway
+        const map = L.map('map', mapOptions).setView([60.3913, 5.3221], 13);
 
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            maxZoom: isMobileDevice() ? 18 : 19, // Limit zoom level for mobile devices
+            maxZoom: isMobileDevice() ? 18 : 19,
             attribution: '© OpenStreetMap contributors'
         }).addTo(map);
 
@@ -138,11 +134,15 @@
         let selectedLines = ['28', '29'];
         let availableLines = new Set(selectedLines);
         let userLocationMarker = null;
-        let hasCenteredOnUser = false; // Flag to track if we've already centered on the user's location
+        let hasCenteredOnUser = false;
+        let ws;
+        let reconnectAttempt = 0;
 
         function initializeWebSocket() {
-            const ws = new WebSocket('wss://api.entur.io/realtime/v1/vehicles/subscriptions');
+            ws = new WebSocket('wss://api.entur.io/realtime/v1/vehicles/subscriptions?ET-Client-Name=dev-testing');
+
             ws.onopen = () => {
+                reconnectAttempt = 0;
                 ws.send(JSON.stringify({
                     query: `subscription {
                         vehicles(codespaceId: "SKY") {
@@ -160,6 +160,7 @@
                         }
                     }`
                 }));
+                console.log("WebSocket connection established with header 'ET-Client-Name: dev-testing'");
             };
 
             ws.onmessage = (event) => {
@@ -184,7 +185,7 @@
                             map.removeLayer(vehicleMarkers[vehicleId]);
                             delete vehicleMarkers[vehicleId];
                         }
-                        return; 
+                        return;
                     }
 
                     if (!lastUpdatedTimes[vehicleId] || lastUpdated > lastUpdatedTimes[vehicleId]) {
@@ -210,6 +211,20 @@
                     }
                 });
             };
+
+            ws.onclose = (event) => {
+                console.error("WebSocket disconnected. Attempting to reconnect...", event);
+                const reconnectDelay = Math.min(30000, 1000 * Math.pow(2, reconnectAttempt));
+                setTimeout(() => {
+                    reconnectAttempt++;
+                    initializeWebSocket();
+                }, reconnectDelay);
+            };
+
+            ws.onerror = (error) => {
+                console.error("WebSocket error observed:", error);
+                ws.close();
+            };
         }
 
         function toggleFilterPanel() {
@@ -220,10 +235,8 @@
 
         function updateLineOptions() {
             const lineOptionsDiv = document.getElementById('lineOptions');
-            lineOptionsDiv.innerHTML = ''; 
-
+            lineOptionsDiv.innerHTML = '';
             const sortedLines = Array.from(availableLines).sort();
-
             sortedLines.forEach(publicCode => {
                 const lineItem = document.createElement('div');
                 lineItem.textContent = `Line ${publicCode}`;
@@ -260,7 +273,6 @@
             const searchValue = document.getElementById('searchInput').value.toLowerCase();
             const lineOptionsDiv = document.getElementById('lineOptions');
             const lineItems = lineOptionsDiv.querySelectorAll('div');
-
             lineItems.forEach(item => {
                 item.style.display = item.textContent.toLowerCase().includes(searchValue) ? 'block' : 'none';
             });
@@ -270,7 +282,6 @@
             Object.keys(vehicleMarkers).forEach(vehicleId => {
                 const marker = vehicleMarkers[vehicleId];
                 const publicCode = marker.options.publicCode;
-
                 if (!selectedLines.includes(publicCode)) {
                     map.removeLayer(marker);
                 } else {
@@ -291,26 +302,23 @@
 
         function locateUser() {
             if (navigator.geolocation) {
-                navigator.geolocation.watchPosition(
+                navigator.geolocation.getCurrentPosition(
                     (position) => {
                         const { latitude, longitude } = position.coords;
-                        if (userLocationMarker) {
-                            userLocationMarker.setLatLng([latitude, longitude]);
-                        } else {
-                            userLocationMarker = createPulsatingMarker(latitude, longitude).addTo(map);
-                        }
-                        // Only center the map on the user's location the first time
-                        if (!hasCenteredOnUser) {
-                            map.setView([latitude, longitude], 13); // Center the map on the user's location
-                            hasCenteredOnUser = true; // Set the flag to true to prevent further auto-zooming
-                        }
+                if (userLocationMarker) {
+                    userLocationMarker.setLatLng([latitude, longitude]);
+                } else {
+                    userLocationMarker = createPulsatingMarker(latitude, longitude).addTo(map);
+                }
+                map.setView([latitude, longitude], 13); // Center the map on the user's location
+                hasCenteredOnUser = true;
                     },
                     (error) => {
                         console.error('Error retrieving location:', error);
                         alert('Unable to retrieve your location.');
                     },
                     {
-                        enableHighAccuracy: true, // Use GPS
+                        enableHighAccuracy: true,
                     }
                 );
             } else {
